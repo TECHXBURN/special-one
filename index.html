@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Krishna &mdash; Reveal</title>
+<style>
+  :root{
+    --bg: #030304;
+    --cyan: #35f2e8;
+    --magenta: #ff3ec8;
+    --white: #ffffff;
+    --dim: #6b6b76;
+  }
+  *{ box-sizing: border-box; }
+  html, body{
+    margin:0;
+    padding:0;
+    background: var(--bg);
+    height:100%;
+    overflow-x:hidden;
+  }
+  body{
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    min-height:100vh;
+    font-family: 'Georgia', 'Times New Roman', serif;
+    color:#eae7e2;
+    padding: 48px 20px;
+  }
+  .label{
+    letter-spacing: 0.08em;
+    font-size: 13px;
+    color: var(--dim);
+    margin-bottom: 18px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+  .stage{
+    position:relative;
+    width: min(90vw, 480px);
+    aspect-ratio: 600 / 800;
+    border-radius: 4px;
+  }
+  canvas{
+    width:100%;
+    height:100%;
+    display:block;
+  }
+  .title{
+    margin-top: 28px;
+    font-size: clamp(28px, 6vw, 44px);
+    letter-spacing: 0.02em;
+    color: #f4f1ea;
+    text-align:center;
+  }
+  .sub{
+    margin-top: 8px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 14px;
+    color: var(--dim);
+    text-align:center;
+    max-width: 420px;
+    line-height: 1.6;
+  }
+</style>
+</head>
+<body>
+
+  <div class="label">JANMASHTAMI</div>
+
+  <div class="stage">
+    <canvas id="canvas" width="600" height="800"></canvas>
+  </div>
+
+  <div class="title">Hare Krishna</div>
+  <div class="sub">Wishing you a Krishna Janmashtami filled with peace and melody.</div>
+
+<script>
+(function(){
+  // ---------------------------------------------------------------
+  // CONFIG — swap IMAGE_SRC for any artwork of your own. The image
+  // should be white/light strokes on a transparent background for
+  // best results (an SVG or PNG line-art / silhouette works well).
+  // ---------------------------------------------------------------
+  const IMAGE_SRC   = 'krishna.jpg';
+  const CELL         = 7;      // reveal-grid cell size in px
+  const T_REVEAL     = 2600;   // ms: pixel-block reveal
+  const T_REFINE     = 1100;   // ms: sharpen the glitch sketch
+  const T_HOLD_SKETCH= 1200;   // ms: hold neon sketch
+  const T_CROSSFADE  = 1300;   // ms: crossfade sketch -> clean line art
+  const T_HOLD_FINAL = 2200;   // ms: hold clean image
+  const T_FADEOUT    = 700;    // ms: fade to black before looping
+
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+
+  const img = new Image();
+  img.onload = init;
+  img.onerror = function(){
+    console.error('Could not load', IMAGE_SRC);
+    const stage = document.querySelector('.stage');
+    const msg = document.createElement('div');
+    msg.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;color:#ff6b6b;font-family:-apple-system,sans-serif;font-size:13px;padding:20px;';
+    msg.textContent = 'Could not load "' + IMAGE_SRC + '". Make sure this file is uploaded in the same folder as index.html.';
+    stage.appendChild(msg);
+  };
+  img.onerror = function(){
+    console.error('Could not load', IMAGE_SRC);
+  };
+  img.src = IMAGE_SRC;
+
+  function init(){
+    // ---- 1. draw the source art once, in white, at full opacity ----
+    const srcCanvas = document.createElement('canvas');
+    srcCanvas.width = W; srcCanvas.height = H;
+    const srcCtx = srcCanvas.getContext('2d');
+    srcCtx.drawImage(img, 0, 0, W, H);
+
+    // Force artwork to pure white so we can tint it freely, while
+    // preserving its alpha (anti-aliased edges included).
+    const srcData = srcCtx.getImageData(0, 0, W, H);
+    for (let i = 0; i < srcData.data.length; i += 4) {
+      srcData.data[i]   = 255;
+      srcData.data[i+1] = 255;
+      srcData.data[i+2] = 255;
+    }
+    srcCtx.putImageData(srcData, 0, 0);
+
+    // ---- 2. pre-build tinted (cyan / magenta / white) layers ----
+    function tinted(hex){
+      const c = document.createElement('canvas');
+      c.width = W; c.height = H;
+      const cx = c.getContext('2d');
+      cx.drawImage(srcCanvas, 0, 0);
+      cx.globalCompositeOperation = 'source-in';
+      cx.fillStyle = hex;
+      cx.fillRect(0, 0, W, H);
+      return c;
+    }
+    const cyanLayer    = tinted(getVar('--cyan'));
+    const magentaLayer = tinted(getVar('--magenta'));
+    const whiteLayer   = srcCanvas;
+
+    // ---- 3. figure out which reveal-cells actually touch the art ----
+    const cols = Math.ceil(W / CELL);
+    const rows = Math.ceil(H / CELL);
+    const activeCells = [];
+    for (let gy = 0; gy < rows; gy++){
+      for (let gx = 0; gx < cols; gx++){
+        const px = gx * CELL, py = gy * CELL;
+        const w = Math.min(CELL, W - px), h = Math.min(CELL, H - py);
+        if (w <= 0 || h <= 0) continue;
+        const chunk = srcCtx.getImageData(px, py, w, h).data;
+        let hasInk = false;
+        for (let i = 3; i < chunk.length; i += 4){
+          if (chunk[i] > 24){ hasInk = true; break; }
+        }
+        if (hasInk) activeCells.push({x: px, y: py, w, h});
+      }
+    }
+    shuffle(activeCells);
+
+    // ---- 4. mask canvas that accumulates revealed cells ----
+    const maskCanvas = document.createElement('canvas');
+    maskCanvas.width = W; maskCanvas.height = H;
+    const maskCtx = maskCanvas.getContext('2d');
+
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = W; tempCanvas.height = H;
+    const tempCtx = tempCanvas.getContext('2d');
+
+    let startTime = performance.now();
+    let revealedCount = 0;
+
+    function shuffle(arr){
+      for (let i = arr.length - 1; i > 0; i--){
+        const j = Math.floor(Math.random() * (i + 1));
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+      }
+    }
+    function getVar(name){
+      return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    }
+    function easeOutCubic(t){ return 1 - Math.pow(1 - t, 3); }
+    function easeInOutQuad(t){ return t < 0.5 ? 2*t*t : 1 - Math.pow(-2*t+2, 2)/2; }
+
+    function resetCycle(){
+      maskCtx.clearRect(0, 0, W, H);
+      revealedCount = 0;
+      shuffle(activeCells);
+      startTime = performance.now();
+    }
+
+    function frame(now){
+      const t = now - startTime;
+      ctx.clearRect(0, 0, W, H);
+
+      let aberration = 0;     // px offset of the cyan/magenta channels
+      let colorAlpha = 0;     // strength of cyan+magenta
+      let whiteAlpha = 1;     // strength of the white channel
+      let glow = 10;
+
+      if (t < T_REVEAL){
+        // --- phase 1: block reveal, glitchy ---
+        const p = easeOutCubic(t / T_REVEAL);
+        const target = Math.floor(p * activeCells.length);
+        while (revealedCount < target){
+          const c = activeCells[revealedCount++];
+          maskCtx.fillStyle = '#fff';
+          maskCtx.fillRect(c.x, c.y, c.w, c.h);
+        }
+        aberration = 6 - p * 2;
+        colorAlpha = 1;
+        whiteAlpha = 0.7 + p * 0.3;
+        glow = 4;
+      }
+      else if (t < T_REVEAL + T_REFINE){
+        // --- phase 2: refine — sharpen the sketch ---
+        if (revealedCount < activeCells.length){
+          for (const c of activeCells){
+            maskCtx.fillStyle = '#fff';
+            maskCtx.fillRect(c.x, c.y, c.w, c.h);
+          }
+          revealedCount = activeCells.length;
+        }
+        const p = easeInOutQuad((t - T_REVEAL) / T_REFINE);
+        aberration = 4 - p * 3.3;
+        colorAlpha = 1;
+        whiteAlpha = 1;
+        glow = 10 + p * 6;
+      }
+      else if (t < T_REVEAL + T_REFINE + T_HOLD_SKETCH){
+        // --- phase 3: hold the neon sketch, gentle shimmer ---
+        const local = t - T_REVEAL - T_REFINE;
+        aberration = 0.7 + Math.sin(local / 140) * 0.5;
+        colorAlpha = 1;
+        whiteAlpha = 1;
+        glow = 16 + Math.sin(local / 220) * 4;
+      }
+      else if (t < T_REVEAL + T_REFINE + T_HOLD_SKETCH + T_CROSSFADE){
+        // --- phase 4: crossfade neon sketch -> clean white line art ---
+        const p = easeInOutQuad((t - T_REVEAL - T_REFINE - T_HOLD_SKETCH) / T_CROSSFADE);
+        aberration = 0.7 * (1 - p);
+        colorAlpha = 1 - p;
+        whiteAlpha = 1;
+        glow = 16 - p * 8;
+      }
+      else if (t < T_REVEAL + T_REFINE + T_HOLD_SKETCH + T_CROSSFADE + T_HOLD_FINAL){
+        // --- phase 5: hold the clean final artwork ---
+        const local = t - (T_REVEAL + T_REFINE + T_HOLD_SKETCH + T_CROSSFADE);
+        aberration = 0;
+        colorAlpha = 0;
+        whiteAlpha = 1;
+        glow = 8 + Math.sin(local / 500) * 3;
+      }
+      else if (t < T_REVEAL + T_REFINE + T_HOLD_SKETCH + T_CROSSFADE + T_HOLD_FINAL + T_FADEOUT){
+        // --- phase 6: fade to black, then loop ---
+        const p = (t - (T_REVEAL + T_REFINE + T_HOLD_SKETCH + T_CROSSFADE + T_HOLD_FINAL)) / T_FADEOUT;
+        aberration = 0;
+        colorAlpha = 0;
+        whiteAlpha = 1 - easeInOutQuad(p);
+        glow = 4;
+      }
+      else {
+        resetCycle();
+        requestAnimationFrame(frame);
+        return;
+      }
+
+      // ---- compose this frame ----
+      tempCtx.clearRect(0, 0, W, H);
+      tempCtx.globalCompositeOperation = 'lighter';
+
+      if (colorAlpha > 0){
+        tempCtx.globalAlpha = colorAlpha;
+        tempCtx.drawImage(cyanLayer, -aberration, 0);
+        tempCtx.drawImage(magentaLayer, aberration, 0);
+      }
+      tempCtx.globalAlpha = whiteAlpha;
+      tempCtx.globalCompositeOperation = colorAlpha > 0 ? 'lighter' : 'source-over';
+      tempCtx.drawImage(whiteLayer, 0, 0);
+      tempCtx.globalAlpha = 1;
+
+      // clip to whatever has been revealed so far
+      tempCtx.globalCompositeOperation = 'destination-in';
+      tempCtx.drawImage(maskCanvas, 0, 0);
+      tempCtx.globalCompositeOperation = 'source-over';
+
+      ctx.save();
+      ctx.shadowColor = colorAlpha > 0.3 ? 'rgba(180,120,255,0.8)' : 'rgba(255,255,255,0.6)';
+      ctx.shadowBlur = glow;
+      ctx.drawImage(tempCanvas, 0, 0);
+      ctx.restore();
+
+      requestAnimationFrame(frame);
+    }
+
+    requestAnimationFrame(frame);
+  }
+})();
+</script>
+</body>
+  </html>
+  
